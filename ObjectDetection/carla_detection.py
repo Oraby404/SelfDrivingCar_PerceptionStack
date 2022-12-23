@@ -274,7 +274,7 @@ def game_loop():
         # sim_world = client.get_world()
         sim_world = client.load_world('Town10HD')
         original_settings = sim_world.get_settings()
-        sim_world.set_weather(carla.WeatherParameters.ClearNoon)
+        sim_world.set_weather(carla.WeatherParameters.CloudySunset)
 
         traffic_manager = client.get_trafficmanager(8000)
         traffic_manager.set_synchronous_mode(True)

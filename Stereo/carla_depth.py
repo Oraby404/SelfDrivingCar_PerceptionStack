@@ -130,8 +130,8 @@ class CameraManager(object):
 
         ######################################################################################
 
-        num_disparities = 10 * 16
-        block_size = 21
+        num_disparities = 8 * 16
+        block_size = 11
         min_disparity = 0
         window_size = 8
 
@@ -176,14 +176,9 @@ class CameraManager(object):
             # Apply log transformation method
             # Converts the image to a depth map using a logarithmic scale,
             # leading to better precision for small distances at the expense of losing it when further away.
+            log_depth_map = np.array((255 / np.log(np.max(depth_map))) * np.log(depth_map), dtype=np.uint8)
 
-            c = 255 / np.log(1 + np.max(depth_map))
-            log_image = c * (np.log(depth_map + 1))
-
-            # Specify the data type so that
-            # float value will be converted to int
-            log_depth_map = np.array(log_image, dtype=np.uint8)
-
+            # covert to RGB to display it on pygame
             depth_map_rgb = cv2.cvtColor(log_depth_map, cv2.COLOR_GRAY2RGB)
 
             surface = pygame.surfarray.make_surface(depth_map_rgb.swapaxes(0, 1))
@@ -274,7 +269,7 @@ def game_loop():
         # sim_world = client.get_world()
         sim_world = client.load_world('Town01')
         original_settings = sim_world.get_settings()
-        sim_world.set_weather(carla.WeatherParameters.ClearNoon)
+        sim_world.set_weather(carla.WeatherParameters.CloudySunset)
 
         traffic_manager = client.get_trafficmanager(8000)
         traffic_manager.set_synchronous_mode(True)
