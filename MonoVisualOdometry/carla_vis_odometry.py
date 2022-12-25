@@ -21,7 +21,6 @@ import cv2
 import numpy as np
 import random
 from queue import Queue
-from numpy.matlib import repmat
 
 import pygame
 from pygame.locals import K_ESCAPE
@@ -32,6 +31,88 @@ from pygame.locals import K_s
 from pygame.locals import K_a
 from pygame.locals import K_d
 from pygame.locals import K_q
+
+
+# ==============================================================================
+# -- HelperFunctions --------------------------------------------------------------
+# ==============================================================================
+
+def FeatureMatcher(descriptor, matcher, first_frame, second_frame, threshold=0.75):
+    first_frame = cv2.cvtColor(first_frame, cv2.COLOR_RGB2GRAY)
+    second_frame = cv2.cvtColor(second_frame, cv2.COLOR_RGB2GRAY)
+
+    key_points_1, descriptor_1 = descriptor.detectAndCompute(first_frame, None)
+    key_points_2, descriptor_2 = descriptor.detectAndCompute(second_frame, None)
+
+    _matches = matcher.knnMatch(descriptor_1, descriptor_2, k=2)
+
+    srcPts = []
+    desPts = []
+
+    for m, n in _matches:
+        if m.distance < threshold * n.distance:
+            srcPts.append(key_points_1[m.queryIdx].pt)  # u1, v1 = kp1[m.queryIdx].pt
+            desPts.append(key_points_2[m.trainIdx].pt)  # u2, v2 = kp2[m.trainIdx].pt
+
+    srcPts = np.int32(srcPts)
+    desPts = np.int32(desPts)
+
+    return srcPts, desPts
+
+
+def estimate_motion(frame1_pts, frame2_pts, k):
+    # Estimate camera motion between a pair of images
+
+    Essential_matrix, mask = cv2.findEssentialMat(points1=frame1_pts, points2=frame2_pts, cameraMatrix=k,
+                                                  method=cv2.RANSAC, prob=0.9)
+    rmat_1, rmat_2, tvec = cv2.decomposeEssentialMat(Essential_matrix)
+
+    if np.linalg.det(rmat_1) == 1:
+        rmat = rmat_1
+    else:
+        rmat = rmat_2
+
+    # We select only inlier points
+    frame1_pts = frame1_pts[mask.ravel() == 1]
+    frame2_pts = frame2_pts[mask.ravel() == 1]
+
+    return rmat, tvec, frame1_pts, frame2_pts
+
+
+def estimate_trajectory(prev_camera_pose, rmat, tvec):
+    """
+    Estimate complete camera trajectory from subsequent image pairs
+
+    """
+    # Construct the T matrix 4x4
+    # Determine current pose from rotation and translation matrices
+    current_pose = np.eye(4)
+    current_pose[0:3, 0:3] = rmat
+    current_pose[0:3, 3] = tvec.T
+
+    # Build the robot's pose from the initial position by multiplying previous and current poses
+    new_camera_pose = prev_camera_pose @ np.linalg.inv(current_pose)
+
+    # Calculate current camera position from origin
+    position = new_camera_pose @ np.array([0., 0., 0., 1.])
+
+    trajectory = position[0:3]
+
+    return new_camera_pose, trajectory
+
+
+def visualize_camera_movement(image1, image1_points, image2_points):
+    for i in range(0, len(image1_points)):
+        # Coordinates of a point on t frame
+        p1 = (int(image1_points[i][0]), int(image1_points[i][1]))
+        # Coordinates of the same point on t+1 frame
+        p2 = (int(image2_points[i][0]), int(image2_points[i][1]))
+
+        cv2.circle(image1, p1, 5, (0, 255, 0), 1)
+        cv2.arrowedLine(image1, p1, p2, (0, 255, 0), 1)
+        cv2.circle(image1, p2, 5, (255, 0, 0), 1)
+
+    return image1
 
 
 # ==============================================================================
@@ -63,13 +144,9 @@ class VehicleWorld(object):
         self.camera_manager.render(display)
 
     def destroy(self):
-        if self.camera_manager.left_cam is not None:
-            self.camera_manager.left_cam.stop()
-            self.camera_manager.left_cam.destroy()
-
-        if self.camera_manager.right_cam is not None:
-            self.camera_manager.right_cam.stop()
-            self.camera_manager.right_cam.destroy()
+        if self.camera_manager.camera is not None:
+            self.camera_manager.camera.stop()
+            self.camera_manager.camera.destroy()
 
         if self.vehicle is not None:
             self.vehicle.destroy()
@@ -86,9 +163,7 @@ WINDOW_HEIGHT = 720
 
 class CameraManager(object):
     def __init__(self, parent_actor, gamma_correction):
-        self.left_cam = None
-        self.right_cam = None
-
+        self.camera = None
         self.frames_queue = Queue()
 
         world = parent_actor.get_world()
@@ -102,14 +177,11 @@ class CameraManager(object):
         camera_bp.set_attribute('gamma', str(gamma_correction))
         camera_bp.set_attribute('sensor_tick', str(0.0625))  # 16 frames per second
 
-        left_camera_transform = carla.Transform(carla.Location(x=2, y=-0.2, z=1.5))
-        right_camera_transform = carla.Transform(carla.Location(x=2, y=0.2, z=1.5))
+        camera_transform = carla.Transform(carla.Location(x=2, y=0.2, z=1.5))
 
-        self.left_cam = world.spawn_actor(camera_bp, left_camera_transform, attach_to=parent_actor)
-        self.right_cam = world.spawn_actor(camera_bp, right_camera_transform, attach_to=parent_actor)
+        self.camera = world.spawn_actor(camera_bp, camera_transform, attach_to=parent_actor)
 
-        self.left_cam.listen(lambda image: self._parse_image(image, "left"))
-        self.right_cam.listen(lambda image: self._parse_image(image, "right"))
+        self.camera.listen(lambda image: self._parse_image(image))
 
         ######################################################################################
 
@@ -137,17 +209,19 @@ class CameraManager(object):
 
         ######################################################################################
 
-        max_disparities = 7 * 16
-        block_size = 15
-        # Stereo Semi Global Block Matcher
-        self.matcher_SGBM = cv2.StereoSGBM_create(minDisparity=0,
-                                                  numDisparities=max_disparities,
-                                                  blockSize=block_size,
-                                                  P1=8 * 3 * block_size ** 2,
-                                                  P2=32 * 3 * block_size ** 2,
-                                                  mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY)
+        # creating SIFT detector
+        self.sift = cv2.SIFT_create()
 
-    ######################################################################################
+        # creating FLANN matcher
+        index_params = dict(algorithm=0, trees=5)
+        search_params = dict(checks=50)
+
+        self.flannMatcher = cv2.FlannBasedMatcher(index_params, search_params)
+
+        # Initialize camera pose
+        self.camera_pose = np.eye(4)
+
+        ######################################################################################
 
     def PointCloud_3D(self, depth_map):
         x = (self.u - self.Center_X) * depth_map / self.focal
@@ -166,51 +240,31 @@ class CameraManager(object):
 
         return p3d
 
-    def LogDepthMap(self, _left_image, _right_image):
-
-        img_l = cv2.cvtColor(_left_image, cv2.COLOR_BGR2GRAY)
-        img_r = cv2.cvtColor(_right_image, cv2.COLOR_BGR2GRAY)
-
-        disp_left = self.matcher_SGBM.compute(img_l, img_r).astype(np.float32) / 16
-
-        # Replace all instances of 0 disparity with a small minimum value to avoid div by 0
-        disp_left[disp_left == 0] = 0.1
-        disp_left[disp_left == -1] = 0.1
-
-        depth_map = self.focal * self.baseline / disp_left
-
-        # Apply log transformation method
-        # Converts the image to a depth map using a logarithmic scale,
-        # leading to better precision for small distances at the expense of losing it when further away.
-        scale = 255 / np.log(np.max(depth_map))
-        log_depth_map = np.array(scale * np.log(depth_map), dtype=np.uint8)
-
-        return log_depth_map
-
     def render(self, display):
-        _left_image = None
-        _right_image = None
-
         if self.frames_queue.qsize() > 1:
-            for _ in range(2):
-                frame = self.frames_queue.get()
-                if frame[1] == 'right':
-                    _right_image = frame[0]
-                elif frame[1] == 'left':
-                    _left_image = frame[0]
+            first_frame = self.frames_queue.get()
+            second_frame = self.frames_queue.get()
 
-            log_depth_map = self.LogDepthMap(_left_image, _right_image)
-            # covert to RGB to display it on pygame
-            depth_map_rgb = cv2.cvtColor(log_depth_map, cv2.COLOR_GRAY2RGB)
+            srcPts, desPts = FeatureMatcher(self.sift, self.flannMatcher, first_frame, second_frame,
+                                            threshold=0.95)
 
-            surface = pygame.surfarray.make_surface(depth_map_rgb.swapaxes(0, 1))
+            rmat, tvec, image1_points, image2_points = estimate_motion(srcPts, desPts, self.K)
+
+            image_move = visualize_camera_movement(first_frame, image1_points, image2_points)
+
+            self.camera_pose, trajectory = estimate_trajectory(self.camera_pose, rmat, tvec)
+
+            print(trajectory)
+
+            surface = pygame.surfarray.make_surface(image_move.swapaxes(0, 1))
             display.blit(surface, (0, 0))
 
-    def _parse_image(self, image, side):
+    def _parse_image(self, image):
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image.height, image.width, 4))[:, :, :3]
+        array = array[:, :, ::-1]  # convert to RGB
 
-        self.frames_queue.put((array, side))
+        self.frames_queue.put(np.ascontiguousarray(array, dtype=np.uint8))
 
 
 # ==============================================================================

@@ -105,9 +105,8 @@ class VehicleWorld(object):
         self._gamma = float(2.2)
 
         blueprint_library = self.world.get_blueprint_library()
-        # vehicle_bp = blueprint_library.find('vehicle.dodge.charger_police_2020')
-        vehicle_bp = blueprint_library.find('vehicle.ford.mustang')
-        vehicle_bp.set_attribute('color', '10,10,10')
+        vehicle_bp = blueprint_library.find('vehicle.dodge.charger_police_2020')
+        vehicle_bp.set_attribute('color', '150,150,150')
 
         vehicle_transform = random.choice(self.world.get_map().get_spawn_points())
 
@@ -162,12 +161,6 @@ class CameraManager(object):
         self.sensor = world.spawn_actor(camera_bp, camera_transform, attach_to=self._parent)
 
         self.sensor.listen(lambda image: self._parse_image(image))
-
-        # image_queue = queue.Queue()
-        # camera.listen(image_queue.put)
-        # while True:
-        #     world.tick()
-        #     image = image_queue.get()
 
     def render(self, display, _model):
         if self._main_image is not None:

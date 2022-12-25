@@ -42,6 +42,32 @@ from torch.backends import cudnn
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+colors_platte = torch.tensor([[0, 0, 0],  # Unlabeled
+                              [70, 70, 70],  # Building
+                              [100, 40, 40],  # Fence
+                              [55, 90, 80],  # Other -> Everything that does not belong to any other category.
+                              [220, 20, 60],  # Pedestrian
+                              [153, 153, 153],  # Pole
+                              [157, 234, 50],  # Roadline
+                              [128, 64, 128],  # Road
+                              [244, 35, 232],  # Sidewalk
+                              [107, 142, 35],  # Vegetation
+                              [0, 0, 142],  # Car
+                              [102, 102, 156],  # Wall
+                              [220, 220, 0],  # Traffic sign
+                              # not used in current model
+                              [70, 130, 180],  # Sky
+                              [81, 0, 81],  # Ground
+                              [150, 100, 100],  # Bridge
+                              [230, 150, 140],  # RailTrack
+                              [180, 165, 180],  # GuardRail
+                              [250, 170, 30],  # TrafficLight
+                              [110, 190, 160],  # Static
+                              [170, 120, 50],  # Dynamic
+                              [45, 60, 150],  # Water
+                              [145, 170, 100]]  # Terrain
+                             , device=device)
+
 
 def semantic_segmentation(_model, _image):
     # turn off gradient tracking
@@ -55,39 +81,10 @@ def semantic_segmentation(_model, _image):
 
         # make the prediction
         pred_mask = torch.argmax(F.softmax(_model(img_tensor), dim=1), dim=1).squeeze(0)
-        pred_mask = map_to_rgb(pred_mask)
+        # map to RGB
+        pred_mask = colors_platte[pred_mask]
 
         return pred_mask.cpu().numpy()
-
-
-def map_to_rgb(_image: torch.tensor):
-    colors = torch.tensor([[0, 0, 0],  # Unlabeled
-                           [70, 70, 70],  # Building
-                           [100, 40, 40],  # Fence
-                           [55, 90, 80],  # Other -> Everything that does not belong to any other category.
-                           [220, 20, 60],  # Pedestrian
-                           [153, 153, 153],  # Pole
-                           [157, 234, 50],  # Roadline
-                           [128, 64, 128],  # Road
-                           [244, 35, 232],  # Sidewalk
-                           [107, 142, 35],  # Vegetation
-                           [0, 0, 142],  # Car
-                           [102, 102, 156],  # Wall
-                           [220, 220, 0],  # Traffic sign
-                           # not used in current model
-                           [70, 130, 180],  # Sky
-                           [81, 0, 81],  # Ground
-                           [150, 100, 100],  # Bridge
-                           [230, 150, 140],  # RailTrack
-                           [180, 165, 180],  # GuardRail
-                           [250, 170, 30],  # TrafficLight
-                           [110, 190, 160],  # Static
-                           [170, 120, 50],  # Dynamic
-                           [45, 60, 150],  # Water
-                           [145, 170, 100]] # Terrain
-                          , device=device)
-
-    return colors[_image]
 
 
 # ==============================================================================
@@ -197,12 +194,6 @@ class CameraManager(object):
         mini_camera_transform = carla.Transform(carla.Location(x=1.3, y=0, z=1.3))
         self.mini_cam = world.spawn_actor(mini_camera_bp, mini_camera_transform, attach_to=self._parent)
         self.mini_cam.listen(lambda image: self._parse_image(image, mini=True))
-
-        # image_queue = queue.Queue()
-        # camera.listen(image_queue.put)
-        # while True:
-        #     world.tick()
-        #     image = image_queue.get()
 
     def render(self, display, _model):
         if self._main_image is not None:
