@@ -20,6 +20,7 @@ import carla
 import numpy as np
 import random
 import gc
+import cv2
 
 import pygame
 from pygame.locals import K_ESCAPE
@@ -45,8 +46,23 @@ from yolov7.utils.plots import plot_one_box
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
+#  'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
+#  'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
+#  'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+#  'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
+#  'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup',
+#  'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
+#  'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+#  'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse',
+#  'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
+#  'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
 
-def detect(model, input_image, imgsz):
+focus_labels = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'train', 'truck',
+                'traffic light', 'stop sign']
+
+
+def detect(model, input_image, xyz_3D, imgsz):
     stride = int(model.stride.max())  # model stride
     imgsz = check_img_size(imgsz, s=stride)  # check img_size
 
@@ -76,6 +92,8 @@ def detect(model, input_image, imgsz):
     # Apply NMS
     pred = non_max_suppression(pred, 0.55, 0.55)
 
+    x_3D, y_3D, z_3D = xyz_3D
+
     # Process detections
     for i, det in enumerate(pred):  # detections per image
         if len(det):
@@ -84,8 +102,25 @@ def detect(model, input_image, imgsz):
 
             # Write results
             for *xyxy, conf, cls in reversed(det):
-                label = f'{names[int(cls)]} {conf:.2f}'
-                plot_one_box(xyxy, input_image, label=label, color=colors[int(cls)], line_thickness=1)
+                if names[int(cls)] in focus_labels:
+                    # 2d box coordinates
+                    x_min = int(xyxy[0])
+                    y_min = int(xyxy[1])
+                    x_max = int(xyxy[2])
+                    y_max = int(xyxy[3])
+                    c1, c2 = (x_min, y_min), (x_max, y_max)
+
+                    # 3d box coordinates
+                    x_box = x_3D[y_min:y_max, x_min:x_max]
+                    y_box = y_3D[y_min:y_max, x_min:x_max]
+                    z_box = z_3D[y_min:y_max, x_min:x_max]
+
+                    distance = np.sqrt(x_box ** 2 + y_box ** 2 + z_box ** 2)
+                    min_distance = np.min(distance)
+
+                    label = f'{names[int(cls)]} {conf:.2f} {min_distance:.2f}'+'m'
+
+                    plot_one_box(c1, c2, input_image, label=label, color=colors[int(cls)], line_thickness=1)
 
     return input_image
 
@@ -119,9 +154,13 @@ class VehicleWorld(object):
         self.camera_manager.render(display, _model)
 
     def destroy(self):
-        if self.camera_manager.sensor is not None:
-            self.camera_manager.sensor.stop()
-            self.camera_manager.sensor.destroy()
+        if self.camera_manager.main_cam is not None:
+            self.camera_manager.main_cam.stop()
+            self.camera_manager.main_cam.destroy()
+
+        if self.camera_manager.depth_cam is not None:
+            self.camera_manager.depth_cam.stop()
+            self.camera_manager.depth_cam.destroy()
 
         if self.vehicle is not None:
             self.vehicle.destroy()
@@ -138,9 +177,13 @@ WINDOW_HEIGHT = 720
 
 class CameraManager(object):
     def __init__(self, parent_actor, gamma_correction):
-        self.sensor = None
+        self.main_cam = None
+        self.depth_cam = None
+
         self.main_surface = None
+
         self._main_image = None
+        self._depth_map = None
 
         self._parent = parent_actor
         self.recording = False
@@ -158,13 +201,59 @@ class CameraManager(object):
 
         camera_transform = carla.Transform(carla.Location(x=1.5, y=0, z=1.5))
 
-        self.sensor = world.spawn_actor(camera_bp, camera_transform, attach_to=self._parent)
+        self.main_cam = world.spawn_actor(camera_bp, camera_transform, attach_to=self._parent)
 
-        self.sensor.listen(lambda image: self._parse_image(image))
+        self.main_cam.listen(lambda image: self._parse_image(image))
+
+        ######################################################################################
+
+        depth_bp = blueprint_library.find('sensor.camera.depth')
+        depth_bp.set_attribute('image_size_x', str(WINDOW_WIDTH))
+        depth_bp.set_attribute('image_size_y', str(WINDOW_HEIGHT))
+        depth_bp.set_attribute('sensor_tick', str(0.05))  # 20 frames per second
+
+        self.depth_cam = world.spawn_actor(depth_bp, camera_transform, attach_to=self._parent)
+
+        self.depth_cam.listen(lambda image: self._parse_depth(image))
+
+        ######################################################################################
+
+        # Generate a grid of pixel coordinates
+        self.u = np.indices((int(WINDOW_HEIGHT), int(WINDOW_WIDTH)))[1]
+        self.v = np.indices((int(WINDOW_HEIGHT), int(WINDOW_WIDTH)))[0]
+
+        # K = [[f, 0, Cu],
+        #      [0, f, Cv],
+        #      [0, 0, 1]]
+
+        self.Center_X = int(WINDOW_WIDTH / 2)
+        self.Center_Y = int(WINDOW_HEIGHT / 2)
+
+        self.fov = depth_bp.get_attribute("fov").as_float()  # fov = 90.0
+        self.focal = WINDOW_WIDTH / (2.0 * np.tan(self.fov * np.pi / 360.0))
+        self.baseline = 0.4
+
+        self.K = np.identity(3)
+        self.K[0, 0] = self.K[1, 1] = self.focal
+        self.K[0, 2] = self.Center_X
+        self.K[1, 2] = self.Center_Y
+
+        self.K_inv = np.linalg.inv(self.K)
+
+        ######################################################################################
+
+    def generate_3D_map(self):
+        # Compute 3D x and y coordinates
+        x = (self.u - self.Center_X) * self._depth_map / self.focal
+        y = (self.v - self.Center_Y) * self._depth_map / self.focal
+        z = self._depth_map
+
+        return x, y, z
 
     def render(self, display, _model):
-        if self._main_image is not None:
-            result = detect(_model, self._main_image, WINDOW_WIDTH)
+        if self._main_image is not None and self._depth_map is not None:
+
+            result = detect(_model, self._main_image, self.generate_3D_map(), WINDOW_WIDTH)
 
             self.main_surface = pygame.surfarray.make_surface(result.swapaxes(0, 1))
             display.blit(self.main_surface, (0, 0))
@@ -176,7 +265,18 @@ class CameraManager(object):
         array = array[:, :, ::-1]  # convert to RGB
 
         self._main_image = np.ascontiguousarray(array, dtype=np.uint8)
-        # self._main_image = array
+
+    def _parse_depth(self, image):
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))
+        array = array.astype(np.float32)
+
+        # the data is stored as 24-bit int across the RGB channels (8 bit per channel)
+        depth = (array[:, :, 2] + array[:, :, 1] * 256 + array[:, :, 0] * 256 * 256)
+        # normalize it in the range [0, 1]
+        normalized = depth / (256 * 256 * 256 - 1)
+        # multiply by the max depth distance to get depth in meters
+        self._depth_map = 1000 * normalized
 
 
 # ==============================================================================

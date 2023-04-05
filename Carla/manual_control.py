@@ -1294,6 +1294,7 @@ def main():
         help='Gamma correction of the camera (default: 2.2)')
     argparser.add_argument(
         '--sync',
+        default=False,
         action='store_true',
         help='Activate synchronous mode execution')
     args = argparser.parse_args()

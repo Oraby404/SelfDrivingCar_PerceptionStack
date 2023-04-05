@@ -37,12 +37,12 @@ from pygame.locals import K_q
 # -- HelperFunctions --------------------------------------------------------------
 # ==============================================================================
 
-def FeatureMatcher(descriptor, matcher, first_frame, second_frame, threshold=0.75):
-    first_frame = cv2.cvtColor(first_frame, cv2.COLOR_RGB2GRAY)
-    second_frame = cv2.cvtColor(second_frame, cv2.COLOR_RGB2GRAY)
-
-    key_points_1, descriptor_1 = descriptor.detectAndCompute(first_frame, None)
-    key_points_2, descriptor_2 = descriptor.detectAndCompute(second_frame, None)
+def FeatureMatcher(matcher, key_points_1, key_points_2, descriptor_1, descriptor_2, threshold=0.75):
+    # first_frame = cv2.cvtColor(first_frame, cv2.COLOR_RGB2GRAY)
+    # second_frame = cv2.cvtColor(second_frame, cv2.COLOR_RGB2GRAY)
+    #
+    # key_points_1, descriptor_1 = descriptor.detectAndCompute(first_frame, None)
+    # key_points_2, descriptor_2 = descriptor.detectAndCompute(second_frame, None)
 
     _matches = matcher.knnMatch(descriptor_1, descriptor_2, k=2)
 
@@ -54,17 +54,45 @@ def FeatureMatcher(descriptor, matcher, first_frame, second_frame, threshold=0.7
             srcPts.append(key_points_1[m.queryIdx].pt)  # u1, v1 = kp1[m.queryIdx].pt
             desPts.append(key_points_2[m.trainIdx].pt)  # u2, v2 = kp2[m.trainIdx].pt
 
-    srcPts = np.int32(srcPts)
-    desPts = np.int32(desPts)
+    srcPts = np.array(srcPts, dtype=np.float32)
+    desPts = np.array(desPts, dtype=np.float32)
 
     return srcPts, desPts
+
+
+def estimate_motion_depth(frame1_pts, k, k_inv, depth_map1):
+    # Get the pixel coordinates of features f[k - 1] and f[k]
+    #   u1, v1 = kp1[m.queryIdx].pt
+    #   u2, v2 = kp2[m.trainIdx].pt
+    #   s = depth1[int(v1), int(u1)]
+
+    scale = depth_map1[np.int32(frame1_pts[:, 1]), np.int32(frame1_pts[:, 0])]
+    scale = scale.reshape(-1, 1)
+
+    # convert to homogenous coordinates
+    frame1_pts_homo = np.c_[frame1_pts, np.ones(frame1_pts.shape[0])]
+
+    # Transform pixel coordinates to camera coordinates
+    camera_points = frame1_pts_homo * scale
+    camera_points = camera_points.reshape(-1, 3, 1)
+
+    Points_3D = k_inv @ camera_points
+
+    # Determine the camera pose from the Perspective-n-Point solution using the RANSAC scheme
+    _, rvec, tvec = cv2.solvePnP(Points_3D, frame1_pts, k, None, flags=0)
+
+    # Convert rotation vector to rotation matrix
+    rmat, _ = cv2.Rodrigues(rvec)
+
+    return rmat, tvec
 
 
 def estimate_motion(frame1_pts, frame2_pts, k):
     # Estimate camera motion between a pair of images
 
     Essential_matrix, mask = cv2.findEssentialMat(points1=frame1_pts, points2=frame2_pts, cameraMatrix=k,
-                                                  method=cv2.RANSAC, prob=0.9)
+                                                  method=cv2.RANSAC, prob=0.8)
+
     rmat_1, rmat_2, tvec = cv2.decomposeEssentialMat(Essential_matrix)
 
     if np.linalg.det(rmat_1) == 1:
@@ -144,9 +172,13 @@ class VehicleWorld(object):
         self.camera_manager.render(display)
 
     def destroy(self):
-        if self.camera_manager.camera is not None:
-            self.camera_manager.camera.stop()
-            self.camera_manager.camera.destroy()
+        if self.camera_manager.main_cam is not None:
+            self.camera_manager.main_cam.stop()
+            self.camera_manager.main_cam.destroy()
+
+        if self.camera_manager.depth_cam is not None:
+            self.camera_manager.depth_cam.stop()
+            self.camera_manager.depth_cam.destroy()
 
         if self.vehicle is not None:
             self.vehicle.destroy()
@@ -163,10 +195,16 @@ WINDOW_HEIGHT = 720
 
 class CameraManager(object):
     def __init__(self, parent_actor, gamma_correction):
-        self.camera = None
-        self.frames_queue = Queue()
+        self.main_cam = None
+        self.depth_cam = None
 
-        world = parent_actor.get_world()
+        self.first_frame = None
+        self.second_frame = None
+        self._depth_map = None
+
+        self._parent = parent_actor
+
+        world = self._parent.get_world()
         blueprint_library = world.get_blueprint_library()
 
         ######################################################################################
@@ -175,13 +213,24 @@ class CameraManager(object):
         camera_bp.set_attribute('image_size_x', str(WINDOW_WIDTH))
         camera_bp.set_attribute('image_size_y', str(WINDOW_HEIGHT))
         camera_bp.set_attribute('gamma', str(gamma_correction))
-        camera_bp.set_attribute('sensor_tick', str(0.0625))  # 16 frames per second
+        camera_bp.set_attribute('sensor_tick', str(0.05))  # 20 frames per second
 
         camera_transform = carla.Transform(carla.Location(x=2, y=0.2, z=1.5))
 
-        self.camera = world.spawn_actor(camera_bp, camera_transform, attach_to=parent_actor)
+        self.main_cam = world.spawn_actor(camera_bp, camera_transform, attach_to=self._parent)
 
-        self.camera.listen(lambda image: self._parse_image(image))
+        self.main_cam.listen(lambda image: self._parse_image(image))
+
+        ######################################################################################
+
+        depth_bp = blueprint_library.find('sensor.camera.depth')
+        depth_bp.set_attribute('image_size_x', str(WINDOW_WIDTH))
+        depth_bp.set_attribute('image_size_y', str(WINDOW_HEIGHT))
+        depth_bp.set_attribute('sensor_tick', str(0.05))  # 20 frames per second
+
+        self.depth_cam = world.spawn_actor(depth_bp, camera_transform, attach_to=self._parent)
+
+        self.depth_cam.listen(lambda image: self._parse_depth(image))
 
         ######################################################################################
 
@@ -212,6 +261,10 @@ class CameraManager(object):
         # creating SIFT detector
         self.sift = cv2.SIFT_create()
 
+        self.kp1 = None
+        self.des1 = None
+        self.gray = None
+
         # creating FLANN matcher
         index_params = dict(algorithm=0, trees=5)
         search_params = dict(checks=50)
@@ -222,6 +275,14 @@ class CameraManager(object):
         self.camera_pose = np.eye(4)
 
         ######################################################################################
+
+    def generate_3D_map(self):
+        # Compute 3D x and y coordinates
+        x = (self.u - self.Center_X) * self._depth_map / self.focal
+        y = (self.v - self.Center_Y) * self._depth_map / self.focal
+        z = self._depth_map
+
+        return x, y, z
 
     def PointCloud_3D(self, depth_map):
         x = (self.u - self.Center_X) * depth_map / self.focal
@@ -241,30 +302,57 @@ class CameraManager(object):
         return p3d
 
     def render(self, display):
-        if self.frames_queue.qsize() > 1:
-            first_frame = self.frames_queue.get()
-            second_frame = self.frames_queue.get()
+        if self.second_frame is not None and self._depth_map is not None:
+            second_frame = self.second_frame
+            second_frame_copy = second_frame.copy()
 
-            srcPts, desPts = FeatureMatcher(self.sift, self.flannMatcher, first_frame, second_frame,
-                                            threshold=0.95)
+            second_frame_gray = cv2.cvtColor(second_frame, cv2.COLOR_RGB2GRAY)
+            key_points_2, descriptor_2 = self.sift.detectAndCompute(second_frame_gray, None)
 
-            rmat, tvec, image1_points, image2_points = estimate_motion(srcPts, desPts, self.K)
+            srcPts, desPts = FeatureMatcher(self.flannMatcher, self.kp1, key_points_2, self.des1, descriptor_2,
+                                            threshold=0.7)
 
-            image_move = visualize_camera_movement(first_frame, image1_points, image2_points)
+            # rmat, tvec, image1_points, image2_points = estimate_motion(srcPts, desPts, self.K)
+
+            rmat, tvec = estimate_motion_depth(srcPts, self.K, self.K_inv, self._depth_map)
+
+            image_move = visualize_camera_movement(self.first_frame, srcPts, desPts)
 
             self.camera_pose, trajectory = estimate_trajectory(self.camera_pose, rmat, tvec)
 
+            # print(self._parent.get_location())
             print(trajectory)
 
             surface = pygame.surfarray.make_surface(image_move.swapaxes(0, 1))
             display.blit(surface, (0, 0))
+
+            self.first_frame = second_frame_copy
+            self.gray = second_frame_gray
+            self.kp1, self.des1 = key_points_2, descriptor_2
 
     def _parse_image(self, image):
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image.height, image.width, 4))[:, :, :3]
         array = array[:, :, ::-1]  # convert to RGB
 
-        self.frames_queue.put(np.ascontiguousarray(array, dtype=np.uint8))
+        if self.first_frame is None:
+            self.first_frame = np.ascontiguousarray(array, dtype=np.uint8)
+            self.gray = cv2.cvtColor(self.first_frame, cv2.COLOR_RGB2GRAY)
+            self.kp1, self.des1 = self.sift.detectAndCompute(self.gray, None)
+        else:
+            self.second_frame = np.ascontiguousarray(array, dtype=np.uint8)
+
+    def _parse_depth(self, image):
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))
+        array = array.astype(np.float32)
+
+        # the data is stored as 24-bit int across the RGB channels (8 bit per channel)
+        depth = (array[:, :, 2] + array[:, :, 1] * 256 + array[:, :, 0] * 256 * 256)
+        # normalize it in the range [0, 1]
+        normalized = depth / (256 * 256 * 256 - 1)
+        # multiply by the max depth distance to get depth in meters
+        self._depth_map = 1000 * normalized
 
 
 # ==============================================================================
@@ -343,17 +431,18 @@ def game_loop():
         ###############################################################
 
         # sim_world = client.get_world()
-        sim_world = client.load_world('Town01')
-        original_settings = sim_world.get_settings()
+        sim_world = client.load_world('Town02')
         sim_world.set_weather(carla.WeatherParameters.CloudySunset)
+
+        original_settings = sim_world.get_settings()
+
+        sim_world.apply_settings(carla.WorldSettings(
+            no_rendering_mode=True,
+            synchronous_mode=True,
+            fixed_delta_seconds=0.05))
 
         traffic_manager = client.get_trafficmanager(8000)
         traffic_manager.set_synchronous_mode(True)
-
-        settings = sim_world.get_settings()
-        settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05
-        sim_world.apply_settings(settings)
 
         ###############################################################
 
@@ -365,13 +454,17 @@ def game_loop():
         vehicle_world = VehicleWorld(sim_world)
         controller = KeyboardControl()
 
-        clock = pygame.time.Clock()
-        while True:
-            clock.tick()
-            sim_world.tick()
+        sim_world.tick()
+        # sim_world.wait_for_tick()
 
+        clock = pygame.time.Clock()
+
+        while True:
             if controller.parse_events(vehicle_world):
                 return
+
+            clock.tick()
+            sim_world.tick()
 
             vehicle_world.render(display)
             pygame.display.flip()
@@ -381,6 +474,9 @@ def game_loop():
             pygame.display.update()
 
     finally:
+
+        if original_settings:
+            sim_world.apply_settings(original_settings)
 
         if vehicle_world is not None:
             vehicle_world.destroy()
