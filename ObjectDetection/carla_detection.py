@@ -118,9 +118,28 @@ def detect(model, input_image, xyz_3D, imgsz):
                     distance = np.sqrt(x_box ** 2 + y_box ** 2 + z_box ** 2)
                     min_distance = np.min(distance)
 
-                    label = f'{names[int(cls)]} {conf:.2f} {min_distance:.2f}'+'m'
+                    label = f'{names[int(cls)]} {conf:.2f} {min_distance:.2f}' + 'm'
 
                     plot_one_box(c1, c2, input_image, label=label, color=colors[int(cls)], line_thickness=1)
+
+                    if conf > 0.9:
+                        if names[int(cls)] == 'car':
+                            if min_distance < 10:
+                                print("Slow down!A Car Ahead of You.")
+                        elif names[int(cls)] == 'stop sign':
+                            print("Stop Sign Detected!")
+                        elif names[int(cls)] == 'traffic light':
+                            if min_distance < 15:
+                                mid_x = (x_min + x_max) // 2
+                                third_height = (y_max - y_min) // 3
+
+                                red_spot = input_image[y_min:y_min + third_height, mid_x - 5:mid_x + 5, 0]
+                                green_spot = input_image[y_min + 2 * third_height:y_max, mid_x - 5:mid_x + 5, 1]
+
+                                if np.count_nonzero(red_spot > 230) > 150:
+                                    print("RED")
+                                elif np.count_nonzero(green_spot > 230) > 150:
+                                    print("GREEN")
 
     return input_image
 
@@ -252,7 +271,6 @@ class CameraManager(object):
 
     def render(self, display, _model):
         if self._main_image is not None and self._depth_map is not None:
-
             result = detect(_model, self._main_image, self.generate_3D_map(), WINDOW_WIDTH)
 
             self.main_surface = pygame.surfarray.make_surface(result.swapaxes(0, 1))
