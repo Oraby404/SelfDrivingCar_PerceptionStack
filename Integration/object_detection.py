@@ -107,5 +107,5 @@ def detect(model, input_image, xyz_3D, imgsz):
                                     print("RED")
                                 elif np.count_nonzero(green_spot > 230) > 150:
                                     print("GREEN")
-
+    del img
     return input_image

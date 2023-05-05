@@ -2,7 +2,7 @@ import carla
 import numpy as np
 import pygame
 
-from ObjectDetection import detect
+from object_detection import detect
 from commons import CONSTANTS
 
 
