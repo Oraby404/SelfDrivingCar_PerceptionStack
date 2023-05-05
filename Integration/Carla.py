@@ -28,16 +28,10 @@ def game_loop():
     traffic_manager = None
 
     try:
-        client = carla.Client('localhost', 2000)
-        client.set_timeout(20.0)
-
-        ###############################################################
-
         # load model
         torch.cuda.empty_cache()
         gc.collect()
         # file = bfs_search_for_file('yolov7.pt')
-        os.chdir("../ObjectDetection")
         model = attempt_load('yolov7_weights/yolov7.pt', map_location=CONSTANTS.DEVICE)  # load FP32 model
         # set model to evaluation mode
         model.eval()
@@ -45,7 +39,9 @@ def game_loop():
 
         ###############################################################
 
-        # sim_world = client.get_world()
+        client = carla.Client('localhost', 2000)
+        client.set_timeout(20.0)
+
         sim_world = client.load_world(CONSTANTS.TOWN)
         original_settings = sim_world.get_settings()
         sim_world.set_weather(carla.WeatherParameters.CloudySunset)
@@ -73,13 +69,10 @@ def game_loop():
         while True:
             clock.tick()
             sim_world.tick()
-
             if controller.parse_events(vehicle_world):
                 return
-
             vehicle_world.render(display, model)
             pygame.display.flip()
-
             text = font.render('% 3.0f FPS' % clock.get_fps(), True, (255, 255, 255))
             display.blit(text, text.get_rect())
             pygame.display.update()
@@ -91,7 +84,6 @@ def game_loop():
             # Always disable sync mode before the script ends to prevent the server blocking whilst waiting for a tick
             sim_world.apply_settings(original_settings)
             traffic_manager.set_synchronous_mode(False)
-
         pygame.quit()
 
 
