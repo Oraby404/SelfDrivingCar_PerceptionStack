@@ -3,6 +3,7 @@
 # ==============================================================================
 
 import gc
+import os
 
 import carla
 import pygame
@@ -31,6 +32,7 @@ def game_loop():
         torch.cuda.empty_cache()
         gc.collect()
         # file = bfs_search_for_file('yolov7.pt')
+        os.chdir('../ObjectDetection/')
         model = attempt_load('yolov7_weights/yolov7.pt', map_location=CONSTANTS.DEVICE)  # load FP32 model
         # set model to evaluation mode
         model.eval()
@@ -66,6 +68,7 @@ def game_loop():
 
         clock = pygame.time.Clock()
         while True:
+            # gc.collect()
             clock.tick()
             sim_world.tick()
             if controller.parse_events(vehicle_world):
