@@ -3,6 +3,7 @@ from enum import Enum
 # Pygame Settings
 SYS_FONT_STYLE = 'Verdana'
 SYS_FONT_SIZE = 20
+PREDICTION_FREQUENCY = 10
 
 # Simulation Settings
 TOWN = "Town10HD"

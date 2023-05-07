@@ -73,9 +73,10 @@ def game_loop():
         ###############################################################
 
         clock = pygame.time.Clock()
-
+        ctr = -1
         while True:
             # gc.collect()
+            ctr += 1
             clock.tick()
             sim_world.tick()
             if controller.parse_events(vehicle_world):
@@ -84,21 +85,24 @@ def game_loop():
             main_image, depth_map, seg_mask = vehicle_world.render()
 
             if main_image is not None:
-                # creating threads
-                thread1 = threading.Thread(target=object_detection.detect,
-                                           args=(model, main_image, depth_map, CONSTANTS.WINDOW_WIDTH,))
-                thread2 = threading.Thread(target=lane_detection.estimate_lane_lines,
-                                           args=(main_image, seg_mask,))
+                # PREDICTION FREQUENCY
+                if ctr % CONSTANTS.PREDICTION_FREQUENCY == 0:
+                    ctr = 0
+                    # creating threads
+                    thread1 = threading.Thread(target=object_detection.detect,
+                                               args=(model, main_image, depth_map, CONSTANTS.WINDOW_WIDTH,))
+                    thread2 = threading.Thread(target=lane_detection.estimate_lane_lines,
+                                               args=(main_image, seg_mask,))
 
-                # starting thread 1
-                thread1.start()
-                # starting thread 2
-                thread2.start()
+                    # starting thread 1
+                    thread1.start()
+                    # starting thread 2
+                    thread2.start()
 
-                # wait until thread 1 is finished
-                thread1.join()
-                # wait until thread 2 is finished
-                thread2.join()
+                    # wait until thread 1 is finished
+                    thread1.join()
+                    # wait until thread 2 is finished
+                    thread2.join()
 
                 # Sequential execution
                 # object_detection.detect(model, main_image, depth_map, CONSTANTS.WINDOW_WIDTH)
