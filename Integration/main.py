@@ -4,9 +4,7 @@
 
 import gc
 import os
-
 import threading
-import multiprocessing
 
 import carla
 import pygame
@@ -15,11 +13,11 @@ from torch.backends import cudnn
 
 import lane_detection
 import object_detection
-
 from commons import CONSTANTS
 from commons.KeyBoardControl import KeyboardControl
 from commons.VehicleWorld import VehicleWorld
 from yolov7.models.experimental import attempt_load
+from commons.CONSTANTS import Color
 
 
 # ==============================================================================
@@ -44,33 +42,35 @@ def game_loop():
         model.eval()
         cudnn.benchmark = True
 
-        ###############################################################
-
+        # Initialize client-server connection & world
         client = carla.Client('localhost', 2000)
         client.set_timeout(20.0)
 
+        # Customize World
         sim_world = client.load_world(CONSTANTS.TOWN)
-        original_settings = sim_world.get_settings()
         sim_world.set_weather(carla.WeatherParameters.CloudySunset)
 
-        traffic_manager = client.get_trafficmanager(8000)
-        traffic_manager.set_synchronous_mode(True)
-
+        # World Settings
         settings = sim_world.get_settings()
+        original_settings = sim_world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = CONSTANTS.REFRESH_RATE  # 20 FPS
         sim_world.apply_settings(settings)
 
-        ###############################################################
+        # Traffic Manager
+        traffic_manager = client.get_trafficmanager(8000)
+        traffic_manager.set_synchronous_mode(True)
 
+        # Initialize Controller & Vehicle World
+        vehicle_world = VehicleWorld(sim_world)
+        controller = KeyboardControl()
+
+        # Pygame settings
         display = pygame.display.set_mode((CONSTANTS.WINDOW_WIDTH, CONSTANTS.WINDOW_HEIGHT),
                                           pygame.HWSURFACE | pygame.DOUBLEBUF)
         font = pygame.font.SysFont(CONSTANTS.SYS_FONT_STYLE, CONSTANTS.SYS_FONT_SIZE)
 
         ###############################################################
-
-        vehicle_world = VehicleWorld(sim_world)
-        controller = KeyboardControl()
 
         clock = pygame.time.Clock()
 
@@ -106,7 +106,7 @@ def game_loop():
 
                 display.blit(pygame.surfarray.make_surface(main_image.swapaxes(0, 1)), (0, 0))
                 pygame.display.flip()
-                text = font.render('% 3.0f FPS' % clock.get_fps(), True, (255, 255, 255))
+                text = font.render('% 3.0f FPS' % clock.get_fps(), True, Color.WHITE.value)
                 display.blit(text, text.get_rect())
                 pygame.display.update()
 
@@ -118,6 +118,8 @@ def game_loop():
             sim_world.apply_settings(original_settings)
             traffic_manager.set_synchronous_mode(False)
         pygame.quit()
+        del model
+        torch.cuda.empty_cache()
 
 
 def main():
