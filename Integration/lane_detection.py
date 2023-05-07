@@ -1,11 +1,12 @@
 import cv2
 import numpy as np
 
+from commons.CONSTANTS import Color
+
 
 def estimate_lane_lines(_main_image, _segmentation_mask):
     # Create an image with pixels belonging to lane boundary categories from the output of semantic segmentation
     lane_mask = np.zeros(_segmentation_mask.shape, dtype=np.uint8)
-    # lane_mask[segmentation_output == 8] = [157, 234, 50]
     lane_mask[_segmentation_mask == 6] = 255
 
     # Perform Edge Detection
@@ -14,127 +15,59 @@ def estimate_lane_lines(_main_image, _segmentation_mask):
     # Perform Line estimation
     lane_lines = cv2.HoughLinesP(edges, rho=1, theta=np.pi / 180, threshold=100, minLineLength=100, maxLineGap=300)
 
-    lane_lines = np.squeeze(lane_lines)
+    if lane_lines is not None:
+        lane_lines = lane_lines.squeeze()
+        # Filter out horizontal lines
+        filtered_lines = __filter_lines(lane_lines, slope_threshold=0.4)
+        merged_lines = merge_lane_lines(filtered_lines)
+        vis_lanes(_main_image, merged_lines)
 
-    # Filter out horizontal lines
-    filtered_lines = []
-    for line in lane_lines:
-        x1, y1, x2, y2 = line
-        if abs(y2 - y1) > abs(x2 - x1) * 0.4:
-            filtered_lines.append(line)
 
-    filtered_lines = np.squeeze(filtered_lines)
-
-    vis_lanes(_main_image, filtered_lines)
+def __filter_lines(lines, slope_threshold=0.4):
+    if lines.ndim > 2:
+        lines = lines.squeeze()
+    if lines.ndim == 1:
+        lines = lines.reshape(-1, 4)
+    assert lines.ndim == 2, f"Error: `lines` has {lines.ndim} dimensions should have 2 dimensions"
+    assert lines.shape[1] == 4, f"Error: `lines` has {lines.shape[1]} columns should have 4 columns"
+    return lines[np.abs(lines[:, 3] - lines[:, 1]) > slope_threshold * np.abs(lines[:, 2] - lines[:, 0])]
 
 
 def vis_lanes(image, lane_lines):
-    for line in lane_lines:
-        if line is not None:
-            x1, y1, x2, y2 = line.astype(int)
-            cv2.line(image, (x1, y1), (x2, y2), (255, 0, 255), 2)
+    # Draw the lines on the image
+    for line in lane_lines.astype(int):
+        x1, y1, x2, y2 = line
+        cv2.line(image, (x1, y1), (x2, y2), Color.MAGENTA.value, 2)
 
 
-def merge_lane_lines(lines):
-    # Step 0: Define thresholds
-    slope_similarity_threshold = 0.01
-    intercept_similarity_threshold = 40
-
-    # Step 1: Get slope and intercept of lines
+def merge_lane_lines(lines, slope_sim_thresh=0.01, intercept_sim_thresh=40):
     slopes, intercepts = get_slope_intercept(lines)
 
-    clusters = []
-    current_inds = []
-    itr = 0
+    # Compute pairwise differences between slopes and intercepts
+    slope_diffs = np.abs(slopes.reshape(-1, 1) - slopes)
+    intercept_diffs = np.abs(intercepts.reshape(-1, 1) - intercepts)
 
-    # Step 3: Iterate over all remaining slopes and intercepts and cluster lines that are close to each other using a slope and intercept threshold.
-    for slope, intercept in zip(slopes, intercepts):
+    # Create a boolean mask for lines that are similar to each other
+    similarity_mask = __calc_similarity_mask(slope_diffs, slope_sim_thresh, intercept_diffs, intercept_sim_thresh)
 
-        exists_in_clusters = np.array([itr in current for current in current_inds])
-
-        if not exists_in_clusters.any():
-
-            slope_cluster = np.logical_and(
-                slopes < (slope + slope_similarity_threshold),
-                slopes > (slope - slope_similarity_threshold))
-
-            intercept_cluster = np.logical_and(
-                intercepts < (intercept + intercept_similarity_threshold),
-                intercepts > (intercept - intercept_similarity_threshold))
-
-            inds = np.argwhere(slope_cluster & intercept_cluster)
-
-            # if inds.size:
-            #     current_inds.append(inds.flatten)
-            #     clusters.append(lines[inds])
-
-            if inds.size:
-                current_inds.append(inds)
-                cluster_lines = lines[inds]
-                cluster_lines_mean = np.mean(cluster_lines, axis=0)
-                cluster_lines_mean = np.expand_dims(cluster_lines_mean, axis=0)
-                if len(current_inds) == 1:
-                    merged_lines = cluster_lines_mean
-                else:
-                    merged_lines = np.concatenate((merged_lines, cluster_lines_mean), axis=0)
-
-        itr += 1
-
-    # Step 4: Merge all lines in clusters using mean averaging
-    # merged_lines = [np.mean(cluster, axis=1) for cluster in clusters]
-    merged_lines = np.squeeze(np.array(merged_lines), axis=1)
-
-    return merged_lines
-
-
-# def get_slope_intercept(lines):
-#     slopes = (lines[:, 3] - lines[:, 1]) / (lines[:, 2] - lines[:, 0] + 0.001)
-#     intercepts = ((lines[:, 3] + lines[:, 1]) - slopes * (lines[:, 2] + lines[:, 0])) / 2
-#     return slopes, intercepts
+    # Loop over each component, and merge the lines in that component
+    merged_lines = [np.mean(lines[similarity_mask[i]], axis=0) for i in range(len(lines))]
+    return np.unique(merged_lines, axis=0, return_index=False)
 
 
 def get_slope_intercept(lines):
-    slopes = []
-    intercepts = []
-    for line in lines:
-        x1, y1, x2, y2 = line
-        slope = (y2 - y1) / ((x2 - x1) + 0.001)
-        intercept = ((y2 + y1) - slope * (x2 - x1)) / 2
-        slopes.append(slope)
-        intercepts.append(intercept)
+    slopes = (lines[:, 3] - lines[:, 1]) / (lines[:, 2] - lines[:, 0] + np.finfo(float).eps)
+    intercepts = ((lines[:, 3] + lines[:, 1]) - slopes * (lines[:, 2] + lines[:, 0])) / 2
     return slopes, intercepts
+
+
+def __calc_similarity_mask(slope_diffs, slope_similarity_threshold, intercept_diffs, intercept_similarity_threshold):
+    return np.logical_and(slope_diffs < slope_similarity_threshold, intercept_diffs < intercept_similarity_threshold)
 
 
 def extrapolate_lines(lines, y_min, y_max):
     slopes, intercepts = get_slope_intercept(lines)
-
-    new_lines = []
-
-    for slope, intercept, in zip(slopes, intercepts):
-        x1 = (y_min - intercept) / slope
-        x2 = (y_max - intercept) / slope
-        new_lines.append([x1, y_min, x2, y_max])
-
-    return np.array(new_lines)
-
-#
-#
-# def find_closest_lines(lines, point):
-#     x0, y0 = point
-#     distances = []
-#     for line in lines:
-#         x1, y1, x2, y2 = line
-#         distances.append(((x2 - x1) * (y1 - y0) - (x1 - x0) *
-#                           (y2 - y1)) / (np.sqrt((y2 - y1) ** 2 + (x2 - x1) ** 2)))
-#
-#     distances = np.abs(np.array(distances))
-#     sorted = distances.argsort()
-#
-#     return lines[sorted[0:2], :]
-
-
-# min_y = np.min(np.argwhere(road_mask == 1)[:, 0])
-#
-# extrapolated_lanes = extrapolate_lines(merged_lane_lines, WINDOW_HEIGHT, min_y)
-# final_lanes = find_closest_lines(extrapolated_lanes, dataset_handler.lane_midpoint)
-# plt.imshow(dataset_handler.vis_lanes(final_lanes))
+    x1 = (y_min - intercepts) / slopes
+    x2 = (y_max - intercepts) / slopes
+    new_lines = np.column_stack((x1, y_min * np.ones_like(x1), x2, y_max * np.ones_like(x2)))
+    return new_lines
