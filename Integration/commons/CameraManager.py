@@ -64,29 +64,7 @@ class CameraManager:
 
         ######################################################################################
 
-        # Generate a grid of pixel coordinates
-        self.u = np.indices((int(CONSTANTS.WINDOW_HEIGHT), int(CONSTANTS.WINDOW_WIDTH)))[1]
-        self.v = np.indices((int(CONSTANTS.WINDOW_HEIGHT), int(CONSTANTS.WINDOW_WIDTH)))[0]
-
-        # K = [[f, 0, Cu],
-        #      [0, f, Cv],
-        #      [0, 0, 1]]
-
-        self.Center_X = int(CONSTANTS.WINDOW_WIDTH / 2)
-        self.Center_Y = int(CONSTANTS.WINDOW_HEIGHT / 2)
-
-        self.fov = depth_bp.get_attribute("fov").as_float()  # fov = 90.0
-        self.focal = CONSTANTS.WINDOW_WIDTH / (2.0 * np.tan(self.fov * np.pi / 360.0))
-        self.baseline = 0.4
-
-        self.K = np.identity(3)
-        self.K[0, 0] = self.K[1, 1] = self.focal
-        self.K[0, 2] = self.Center_X
-        self.K[1, 2] = self.Center_Y
-
-        self.K_inv = np.linalg.inv(self.K)
         return
-        ######################################################################################
 
     def _parse_image(self, image) -> None:
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8")) \
@@ -113,21 +91,11 @@ class CameraManager:
         self._seg_mask = np.ascontiguousarray(array[:, :, 2], dtype=np.uint8)
         return
 
-    def generate_3D_map(self):
-        # Compute 3D x and y coordinates
-        x = (self.u - self.Center_X) * self._depth_map / self.focal
-        y = (self.v - self.Center_Y) * self._depth_map / self.focal
-        z = self._depth_map
-
-        return x, y, z
-
-    def render(self, display, model) -> None:
-        if self._main_image is not None and self._depth_map is not None:
-            result = detect(model, self._main_image, self.generate_3D_map(), CONSTANTS.WINDOW_WIDTH)
-
-            self.main_surface = pygame.surfarray.make_surface(result.swapaxes(0, 1))
-            display.blit(self.main_surface, (0, 0))
-            return
+    def render(self):
+        if self._main_image is not None and self._depth_map is not None and self._seg_mask is not None:
+            return self._main_image, self._depth_map, self._seg_mask
+        else:
+            return None,None,None
 
     def destroy(self) -> None:
         for cam in self.cameras.values():

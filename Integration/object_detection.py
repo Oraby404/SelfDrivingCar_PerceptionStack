@@ -7,29 +7,44 @@ import random
 import numpy as np
 import torch
 
+from commons import CONSTANTS
 from yolov7.utils.datasets import letterbox
 from yolov7.utils.general import check_img_size, non_max_suppression, scale_coords
 from yolov7.utils.plots import plot_one_box
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck',
-#  'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
-#  'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra',
-#  'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
-#  'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove',
-#  'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup',
-#  'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange',
-#  'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
-#  'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse',
-#  'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink',
-#  'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
-
 focus_labels = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'train', 'truck',
                 'traffic light', 'stop sign']
 
+######################################################################################
+# camera parameters
 
-def detect(model, input_image, xyz_3D, imgsz):
+# Generate a grid of pixel coordinates
+u = np.indices((int(CONSTANTS.WINDOW_HEIGHT), int(CONSTANTS.WINDOW_WIDTH)))[1]
+v = np.indices((int(CONSTANTS.WINDOW_HEIGHT), int(CONSTANTS.WINDOW_WIDTH)))[0]
+
+Center_X = int(CONSTANTS.WINDOW_WIDTH / 2)
+Center_Y = int(CONSTANTS.WINDOW_HEIGHT / 2)
+
+fov = 90.0
+focal = CONSTANTS.WINDOW_WIDTH / (2.0 * np.tan(fov * np.pi / 360.0))
+
+
+######################################################################################
+
+def generate_3D_map(_depth_map):
+    # Compute 3D x and y coordinates
+    x = (u - Center_X) * _depth_map / focal
+    y = (v - Center_Y) * _depth_map / focal
+    z = _depth_map
+
+    return x, y, z
+
+
+def detect(model, input_image, _depth_map, imgsz):
+    xyz_3D = generate_3D_map(_depth_map)
+
     stride = int(model.stride.max())  # model stride
     imgsz = check_img_size(imgsz, s=stride)  # check img_size
 
@@ -108,4 +123,3 @@ def detect(model, input_image, xyz_3D, imgsz):
                                 elif np.count_nonzero(green_spot > 230) > 150:
                                     print("GREEN")
     del img
-    return input_image

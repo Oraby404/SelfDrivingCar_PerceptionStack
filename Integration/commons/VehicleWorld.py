@@ -25,8 +25,8 @@ class VehicleWorld:
         # Set up the camera sensor.
         self.camera_manager = CameraManager(self.vehicle, self._gamma)
 
-    def render(self, display, model):
-        self.camera_manager.render(display, model)
+    def render(self):
+        return self.camera_manager.render()
 
     def destroy(self):
         if self.camera_manager is not None:

@@ -205,7 +205,6 @@ class CameraManager(object):
         self._depth_map = None
 
         self._parent = parent_actor
-        self.recording = False
 
         world = self._parent.get_world()
         blueprint_library = world.get_blueprint_library()
@@ -369,7 +368,6 @@ def game_loop():
     try:
         client = carla.Client('localhost', 2000)
         client.set_timeout(20.0)
-
         ###############################################################
 
         # load model
@@ -403,6 +401,7 @@ def game_loop():
         ###############################################################
 
         vehicle_world = VehicleWorld(sim_world)
+
         controller = KeyboardControl()
 
         clock = pygame.time.Clock()
