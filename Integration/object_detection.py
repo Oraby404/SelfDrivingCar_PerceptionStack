@@ -4,6 +4,7 @@
 
 import random
 
+import cv2
 import numpy as np
 import torch
 
@@ -94,12 +95,13 @@ def detect(model, input_image, _depth_map, imgsz):
                     c1, c2 = (x_min, y_min), (x_max, y_max)
 
                     # 3d box coordinates
-                    x_box = x_3D[y_min:y_max, x_min:x_max]
-                    y_box = y_3D[y_min:y_max, x_min:x_max]
-                    z_box = z_3D[y_min:y_max, x_min:x_max]
+                    x_box = x_3D[y_min:y_max, x_min:x_max].reshape(-1)
+                    y_box = y_3D[y_min:y_max, x_min:x_max].reshape(-1)
+                    z_box = z_3D[y_min:y_max, x_min:x_max].reshape(-1)
 
                     distance = np.sqrt(x_box ** 2 + y_box ** 2 + z_box ** 2)
-                    min_distance = np.min(distance)
+                    min_distance_idx = np.argmin(distance)
+                    min_distance = distance[min_distance_idx]
 
                     label = f'{names[int(cls)]} {conf:.2f} {min_distance:.2f}' + 'm'
 
@@ -107,20 +109,69 @@ def detect(model, input_image, _depth_map, imgsz):
 
                     if conf > 0.9:
                         if names[int(cls)] == 'car':
-                            if min_distance < 10:
+                            if __car_collision(x_box, min_distance, threshold=10):
                                 print("Slow down!A Car Ahead of You.")
+
                         elif names[int(cls)] == 'stop sign':
                             print("Stop Sign Detected!")
                         elif names[int(cls)] == 'traffic light':
-                            if min_distance < 15:
-                                mid_x = (x_min + x_max) // 2
-                                third_height = (y_max - y_min) // 3
-
-                                red_spot = input_image[y_min:y_min + third_height, mid_x - 5:mid_x + 5, 0]
-                                green_spot = input_image[y_min + 2 * third_height:y_max, mid_x - 5:mid_x + 5, 1]
-
-                                if np.count_nonzero(red_spot > 230) > 150:
-                                    print("RED")
-                                elif np.count_nonzero(green_spot > 230) > 150:
-                                    print("GREEN")
+                            if min_distance < 20:
+                                traffic_light = __get_roi(input_image, c1, c2)
+                                traffic_light_color = __get_red_or_green(traffic_light)
+                                print(f"Traffic light {traffic_light_color} color")
     del img
+
+
+def __car_collision(x_box, distance, threshold):
+    return np.abs(np.min(x_box)) < 5 and distance < threshold
+
+
+def __get_roi(image, c1, c2):
+    x1, y1 = c1
+    x2, y2 = c2
+    roi = image[y1:y2, x1:x2]
+    return roi
+
+
+def __get_red_or_green(traffic_light):
+    count_red = __count_red(traffic_light)
+    count_green = __count_green(traffic_light)
+    num_pixels = np.size(traffic_light) // 3
+
+    if count_green > count_red and count_green > num_pixels // 20:
+        return "GREEN"
+    elif count_red > count_green and count_red > num_pixels // 20:
+        return "RED"
+    else:
+        return "UNSURE"
+
+
+def __count_red(img):
+    # Define the red color range in HSV color space
+    lower_red = np.array([0, 50, 50])
+    upper_red = np.array([10, 255, 255])
+    lower_red_2 = np.array([170, 50, 50])
+    upper_red_2 = np.array([180, 255, 255])
+
+    # Convert the input image to HSV color space
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+
+    # Create a mask for pixels that fall within the red color range
+    mask1 = cv2.inRange(hsv, lower_red, upper_red)
+    mask2 = cv2.inRange(hsv, lower_red_2, upper_red_2)
+    mask = mask1 | mask2
+    return np.count_nonzero(mask)
+
+
+def __count_green(img):
+    # Define the green color range in HSV color space
+    lower_green = np.array([36, 25, 25])
+    upper_green = np.array([70, 255, 255])
+
+    # Convert the input image to HSV color space
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+
+    # Create a mask for pixels that fall within the green color range
+    mask = cv2.inRange(hsv, lower_green, upper_green)
+
+    return np.count_nonzero(mask)
