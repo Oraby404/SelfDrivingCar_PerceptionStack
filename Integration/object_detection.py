@@ -7,6 +7,7 @@ import random
 import numpy as np
 import torch
 
+import tools
 from commons import CONSTANTS
 from yolov7.utils.datasets import letterbox
 from yolov7.utils.general import check_img_size, non_max_suppression, scale_coords
@@ -50,7 +51,7 @@ def detect(model, input_image, _depth_map, imgsz):
 
     # Get names and colors
     names = model.module.names if hasattr(model, 'module') else model.names
-    colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
+    colors = random.choices(tools.get_colors(), k=len(names))
 
     ##########################################################
 

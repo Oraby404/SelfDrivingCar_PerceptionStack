@@ -1,3 +1,5 @@
+from enum import Enum
+
 # Pygame Settings
 SYS_FONT_STYLE = 'Verdana'
 SYS_FONT_SIZE = 20
@@ -24,3 +26,14 @@ VEHICLE_COLOR = '150,150,150'
 
 # Device
 DEVICE = "cuda"
+
+
+# Colors
+class Color(Enum):
+    RED = (255, 0, 0)
+    GREEN = (0, 255, 0)
+    BLUE = (0, 0, 255)
+    YELLOW = (255, 255, 0)
+    MAGENTA = (255, 0, 255)
+    CYAN = (0, 255, 255)
+    WHITE = (255, 255, 255)
