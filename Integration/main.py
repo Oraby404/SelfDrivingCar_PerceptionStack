@@ -87,9 +87,6 @@ def game_loop():
 
             if main_image is not None:
                 # cv2.imwrite("/home/oraby/Pictures/presentation/depth.png", depth_map)
-                # scale = 255 / np.log(np.max(depth_map))
-                # log_depth_map = np.array(scale * np.log(depth_map), dtype=np.uint8)
-                # cv2.imwrite("/home/oraby/Pictures/presentation/log_depth_map.png", log_depth_map)
 
                 # creating threads
                 thread1 = threading.Thread(target=object_detection.detect,
