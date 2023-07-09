@@ -2,6 +2,7 @@ from pathlib import Path
 from queue import Queue
 from typing import Union
 
+from commons.CONSTANTS import Color
 from definitions import ROOT_DIR
 
 
@@ -38,3 +39,7 @@ def bfs_search_for_file(file_name: Union[Path, str]):
 
     # If the file was not found, return None
     return None
+
+
+def get_colors():
+    return [color.value for color in Color]
