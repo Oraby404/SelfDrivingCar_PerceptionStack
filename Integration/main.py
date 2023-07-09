@@ -125,8 +125,8 @@ def game_loop():
             sim_world.apply_settings(original_settings)
             traffic_manager.set_synchronous_mode(False)
         pygame.quit()
-        # del model
-        # torch.cuda.empty_cache()
+        del model
+        torch.cuda.empty_cache()
 
 
 def main():
