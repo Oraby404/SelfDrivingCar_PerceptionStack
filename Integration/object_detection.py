@@ -17,6 +17,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 focus_labels = ['person', 'bicycle', 'car', 'motorcycle', 'bus', 'train', 'truck',
                 'traffic light', 'stop sign']
 
+colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(100)]
+
 ######################################################################################
 # camera parameters
 
@@ -50,7 +52,6 @@ def detect(model, input_image, _depth_map, imgsz):
 
     # Get names and colors
     names = model.module.names if hasattr(model, 'module') else model.names
-    colors = [[random.randint(0, 255) for _ in range(3)] for _ in names]
 
     ##########################################################
 
@@ -72,7 +73,7 @@ def detect(model, input_image, _depth_map, imgsz):
         pred = model(img, augment=False)[0]
 
     # Apply NMS
-    pred = non_max_suppression(pred, 0.55, 0.55)
+    pred = non_max_suppression(pred, 0.75, 0.75)
 
     x_3D, y_3D, z_3D = xyz_3D
 

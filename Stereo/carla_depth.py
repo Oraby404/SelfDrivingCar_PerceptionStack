@@ -17,11 +17,10 @@ Use WASD keys for control.
 # ==============================================================================
 
 import carla
+from carla import ColorConverter as cc
 import cv2
 import numpy as np
 import random
-from queue import Queue
-from numpy.matlib import repmat
 
 import pygame
 from pygame.locals import K_ESCAPE
@@ -71,6 +70,10 @@ class VehicleWorld(object):
             self.camera_manager.right_cam.stop()
             self.camera_manager.right_cam.destroy()
 
+        if self.camera_manager.depth_cam is not None:
+            self.camera_manager.depth_cam.stop()
+            self.camera_manager.depth_cam.destroy()
+
         if self.vehicle is not None:
             self.vehicle.destroy()
 
@@ -88,8 +91,11 @@ class CameraManager(object):
     def __init__(self, parent_actor, gamma_correction):
         self.left_cam = None
         self.right_cam = None
+        self.depth_cam = None
 
-        self.frames_queue = Queue()
+        self.left_img = None
+        self.right_img = None
+        self._depth_map = None
 
         world = parent_actor.get_world()
         blueprint_library = world.get_blueprint_library()
@@ -100,7 +106,7 @@ class CameraManager(object):
         camera_bp.set_attribute('image_size_x', str(WINDOW_WIDTH))
         camera_bp.set_attribute('image_size_y', str(WINDOW_HEIGHT))
         camera_bp.set_attribute('gamma', str(gamma_correction))
-        camera_bp.set_attribute('sensor_tick', str(0.0625))  # 16 frames per second
+        camera_bp.set_attribute('sensor_tick', str(0.05))  # 16 frames per second
 
         left_camera_transform = carla.Transform(carla.Location(x=2, y=-0.2, z=1.5))
         right_camera_transform = carla.Transform(carla.Location(x=2, y=0.2, z=1.5))
@@ -108,32 +114,26 @@ class CameraManager(object):
         self.left_cam = world.spawn_actor(camera_bp, left_camera_transform, attach_to=parent_actor)
         self.right_cam = world.spawn_actor(camera_bp, right_camera_transform, attach_to=parent_actor)
 
-        self.left_cam.listen(lambda image: self._parse_image(image, "left"))
-        self.right_cam.listen(lambda image: self._parse_image(image, "right"))
+        self.left_cam.listen(lambda image: self._parse_left(image))
+        self.right_cam.listen(lambda image: self._parse_right(image))
 
         ######################################################################################
 
-        # Generate a grid of pixel coordinates
-        self.u = np.indices((int(WINDOW_HEIGHT), int(WINDOW_WIDTH)))[1]
-        self.v = np.indices((int(WINDOW_HEIGHT), int(WINDOW_WIDTH)))[0]
+        depth_bp = blueprint_library.find('sensor.camera.depth')
+        depth_bp.set_attribute('image_size_x', str(WINDOW_WIDTH))
+        depth_bp.set_attribute('image_size_y', str(WINDOW_HEIGHT))
+        depth_bp.set_attribute('sensor_tick', str(0.05))
+        camera_transform = carla.Transform(carla.Location(x=2, y=0, z=1.5))
 
-        # K = [[f, 0, Cu],
-        #      [0, f, Cv],
-        #      [0, 0, 1]]
+        self.depth_cam = world.spawn_actor(depth_bp, camera_transform, attach_to=parent_actor)
 
-        self.Center_X = int(WINDOW_WIDTH / 2)
-        self.Center_Y = int(WINDOW_HEIGHT / 2)
+        self.depth_cam.listen(lambda image: self._parse_depth(image))
+
+        ######################################################################################
 
         self.fov = camera_bp.get_attribute("fov").as_float()  # fov = 90.0
         self.focal = WINDOW_WIDTH / (2.0 * np.tan(self.fov * np.pi / 360.0))
         self.baseline = 0.4
-
-        self.K = np.identity(3)
-        self.K[0, 0] = self.K[1, 1] = self.focal
-        self.K[0, 2] = self.Center_X
-        self.K[1, 2] = self.Center_Y
-
-        self.K_inv = np.linalg.inv(self.K)
 
         ######################################################################################
 
@@ -149,25 +149,7 @@ class CameraManager(object):
 
     ######################################################################################
 
-    def PointCloud_3D(self, depth_map):
-        x = (self.u - self.Center_X) * depth_map / self.focal
-        y = (self.v - self.Center_Y) * depth_map / self.focal
-        p3d = np.stack((x, y, depth_map))
-
-        # p0 = p3d[:, 0] ... # pi = p3d[:, i]
-        return p3d
-
-    def PointSet_3D(self, u_coord, v_coord, depth_map):
-        # point 2D = [u,v,1] in pixell coordinates
-        p2d = np.array([u_coord, v_coord, np.ones_like(u_coord)])
-
-        # P = [X,Y,Z]
-        p3d = np.dot(self.K_inv, p2d) * depth_map
-
-        return p3d
-
     def LogDepthMap(self, _left_image, _right_image):
-
         img_l = cv2.cvtColor(_left_image, cv2.COLOR_BGR2GRAY)
         img_r = cv2.cvtColor(_right_image, cv2.COLOR_BGR2GRAY)
 
@@ -188,29 +170,43 @@ class CameraManager(object):
         return log_depth_map
 
     def render(self, display):
-        _left_image = None
-        _right_image = None
+        if self.left_img is not None and self.right_img is not None and self._depth_map is not None:
+            # log_depth_map = self.LogDepthMap(self.left_img, self.right_img)
+            # # covert to RGB to display it on pygame
+            # depth_map_rgb = cv2.cvtColor(log_depth_map, cv2.COLOR_GRAY2RGB)
+            # surface = pygame.surfarray.make_surface(depth_map_rgb.swapaxes(0, 1))
 
-        if self.frames_queue.qsize() > 1:
-            for _ in range(2):
-                frame = self.frames_queue.get()
-                if frame[1] == 'right':
-                    _right_image = frame[0]
-                elif frame[1] == 'left':
-                    _left_image = frame[0]
+            # cv2.imwrite("/home/oraby/Pictures/stereo/left.png",self.left_img)
+            # cv2.imwrite("/home/oraby/Pictures/stereo/right.png",self.right_img)
+            # cv2.imwrite("/home/oraby/Pictures/stereo/depth.png",self._depth_map[:, :, ::-1])
 
-            log_depth_map = self.LogDepthMap(_left_image, _right_image)
-            # covert to RGB to display it on pygame
-            depth_map_rgb = cv2.cvtColor(log_depth_map, cv2.COLOR_GRAY2RGB)
-
-            surface = pygame.surfarray.make_surface(depth_map_rgb.swapaxes(0, 1))
+            surface = pygame.surfarray.make_surface(self._depth_map.swapaxes(0, 1))
             display.blit(surface, (0, 0))
 
-    def _parse_image(self, image, side):
+    def _parse_left(self, image):
+        # image.save_to_disk('_out/left')
         array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
         array = np.reshape(array, (image.height, image.width, 4))[:, :, :3]
 
-        self.frames_queue.put((array, side))
+        self.left_img = np.ascontiguousarray(array, dtype=np.uint8)
+
+    def _parse_right(self, image):
+        # image.save_to_disk('_out/right')
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))[:, :, :3]
+
+        self.right_img = np.ascontiguousarray(array, dtype=np.uint8)
+
+    def _parse_depth(self, image) -> None:
+        # image.convert(cc.Depth)
+        image.convert(cc.LogarithmicDepth)
+        # image.save_to_disk('_out/depth')
+        array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
+        array = np.reshape(array, (image.height, image.width, 4))
+        array = array[:, :, :3]
+        self._depth_map = array[:, :, ::-1]
+
+        return
 
 
 # ==============================================================================
@@ -289,7 +285,7 @@ def game_loop():
         ###############################################################
 
         # sim_world = client.get_world()
-        sim_world = client.load_world('Town01')
+        sim_world = client.load_world('Town10HD')
         original_settings = sim_world.get_settings()
         sim_world.set_weather(carla.WeatherParameters.CloudySunset)
 

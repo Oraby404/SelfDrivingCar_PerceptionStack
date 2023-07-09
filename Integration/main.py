@@ -9,6 +9,8 @@ import threading
 import multiprocessing
 
 import carla
+import cv2
+import numpy as np
 import pygame
 import torch
 from torch.backends import cudnn
@@ -84,6 +86,11 @@ def game_loop():
             main_image, depth_map, seg_mask = vehicle_world.render()
 
             if main_image is not None:
+                # cv2.imwrite("/home/oraby/Pictures/presentation/depth.png", depth_map)
+                # scale = 255 / np.log(np.max(depth_map))
+                # log_depth_map = np.array(scale * np.log(depth_map), dtype=np.uint8)
+                # cv2.imwrite("/home/oraby/Pictures/presentation/log_depth_map.png", log_depth_map)
+
                 # creating threads
                 thread1 = threading.Thread(target=object_detection.detect,
                                            args=(model, main_image, depth_map, CONSTANTS.WINDOW_WIDTH,))
@@ -102,7 +109,7 @@ def game_loop():
 
                 # Sequential execution
                 # object_detection.detect(model, main_image, depth_map, CONSTANTS.WINDOW_WIDTH)
-                # lane_detection.estimate_lane_lines(main_image,seg_mask)
+                # lane_detection.estimate_lane_lines(main_image, seg_mask)
 
                 display.blit(pygame.surfarray.make_surface(main_image.swapaxes(0, 1)), (0, 0))
                 pygame.display.flip()
@@ -118,6 +125,8 @@ def game_loop():
             sim_world.apply_settings(original_settings)
             traffic_manager.set_synchronous_mode(False)
         pygame.quit()
+        # del model
+        # torch.cuda.empty_cache()
 
 
 def main():
